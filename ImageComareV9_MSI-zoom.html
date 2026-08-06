@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProAlign V9 | High-Res Zoom & Pan</title>
+    <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"></script>
+    <style>
+        :root {
+            --accent: #00f2ff;
+            --bg: #0b0f1a;
+            --panel: rgba(22, 30, 46, 0.95);
+            --slider-pos: 50%;
+        }
+
+        * {
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg);
+            color: #e2e8f0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        nav {
+            padding: 0.75rem 1.5rem;
+            background: var(--panel);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .controls { display: flex; gap: 12px; }
+        
+        button {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: 0.2s;
+        }
+
+        button:hover { background: rgba(255, 255, 255, 0.15); border-color: var(--accent); }
+        button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+        button.primary { background: #10b981; border: none; }
+        button.band-loaded { border-color: #10b981; color: #10b981; }
+
+        main { flex: 1; display: flex; position: relative; background: #000; overflow: hidden; }
+
+        #sidebar {
+            width: 300px;
+            background: var(--panel);
+            border-right: 1px solid rgba(255,255,255,0.1);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            z-index: 100;
+            overflow-y: auto;
+        }
+
+        .img-control-group {
+            background: rgba(0,0,0,0.2);
+            padding: 1rem;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .img-control-group h4 { margin: 0; color: var(--accent); font-size: 0.8rem; text-transform: uppercase; }
+        .band-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+
+        #view-container { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+
+        /* --- Workspace --- */
+        #align-view { display: flex; width: 100%; height: 100%; }
+        .pane { 
+            flex: 1; position: relative; background: #050505; 
+            display: flex; align-items: center; justify-content: center;
+            border-right: 1px solid #222;
+        }
+        canvas { max-width: 95%; max-height: 95%; cursor: crosshair; }
+
+        #compare-view { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            display: none; background: #000; 
+            cursor: grab;
+            overflow: hidden;
+        }
+        #compare-view:active { cursor: grabbing; }
+
+        #stage {
+            position: relative;
+            transform-origin: 0 0;
+            touch-action: none;
+            will-change: transform;
+        }
+
+        .img-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+        #img-ref, #img-ovl { position: absolute; top: 0; left: 0; transform-origin: 0 0; display: block; }
+
+        #after-clip { z-index: 2; clip-path: inset(0 0 0 var(--slider-pos)); }
+
+        #slider-bar {
+            position: absolute; top: 0; bottom: 0; left: var(--slider-pos);
+            width: 4px; background: var(--accent); z-index: 10;
+            cursor: ew-resize; transform: translateX(-50%);
+            box-shadow: 0 0 15px var(--accent);
+            pointer-events: auto; 
+        }
+
+        #slider-bar::after {
+            content: '↔'; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); width: 34px; height: 34px;
+            background: var(--accent); color: #000; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; font-weight: bold;
+        }
+
+        .point-tag {
+            background: rgba(255,255,255,0.05); padding: 8px 12px;
+            border-radius: 6px; display: flex; justify-content: space-between;
+            align-items: center; font-size: 0.8rem; border-left: 4px solid var(--clr);
+        }
+
+        #zoom-info {
+            position: absolute; bottom: 20px; right: 20px;
+            background: rgba(0,0,0,0.6); padding: 5px 12px;
+            border-radius: 20px; font-size: 12px; color: var(--accent);
+            pointer-events: none; z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div style="font-weight: 800; color: var(--accent); letter-spacing: 1px;">SATELLITE_ZOOM_V9 by Tracy Rose</div>
+        <div class="controls">
+            <button id="btn-align" class="active" onclick="setView('align')">1. Alignment</button>
+            <button id="btn-compare" onclick="setView('compare')">2. Compare</button>
+        </div>
+        <button style="color:#ff4d4d" onclick="resetAll()">Reset</button>
+    </nav>
+
+    <main>
+        <div id="sidebar">
+            <div class="img-control-group">
+                <h4>Ref Composite</h4>
+                <div class="band-row">
+                    <button id="ref-b1" onclick="document.getElementById('f1-1').click()">NIR</button>
+                    <button id="ref-b2" onclick="document.getElementById('f1-2').click()">Red</button>
+                    <button id="ref-b3" onclick="document.getElementById('f1-3').click()">Grn</button>
+                </div>
+            </div>
+
+            <div class="img-control-group">
+                <h4>Ovl Composite</h4>
+                <div class="band-row">
+                    <button id="ovl-b1" onclick="document.getElementById('f2-1').click()">NIR</button>
+                    <button id="ovl-b2" onclick="document.getElementById('f2-2').click()">Red</button>
+                    <button id="ovl-b3" onclick="document.getElementById('f2-3').click()">Grn</button>
+                </div>
+            </div>
+
+            <div class="img-control-group">
+                <h4>Controls</h4>
+                <div style="font-size: 0.75rem; opacity: 0.7; line-height: 1.4">
+                    • <b>Wheel:</b> Zoom In/Out<br>
+                    • <b>Drag:</b> Pan Viewport<br>
+                    • <b>Slider:</b> Wipe Comparison
+                </div>
+                <button onclick="resetCamera()" style="margin-top: 5px">Reset Camera</button>
+            </div>
+
+            <div class="img-control-group">
+                <h4 style="color:white">Registration</h4>
+                <button class="primary" onclick="addPair()">+ Add New Pair</button>
+                <div id="point-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+            </div>
+        </div>
+
+        <!-- Hidden Inputs -->
+        <input type="file" id="f1-1" hidden onchange="handleBand(event, 0, 0)"><input type="file" id="f1-2" hidden onchange="handleBand(event, 0, 1)"><input type="file" id="f1-3" hidden onchange="handleBand(event, 0, 2)">
+        <input type="file" id="f2-1" hidden onchange="handleBand(event, 1, 0)"><input type="file" id="f2-2" hidden onchange="handleBand(event, 1, 1)"><input type="file" id="f2-3" hidden onchange="handleBand(event, 1, 2)">
+
+        <div id="view-container">
+            <div id="align-view">
+                <div class="pane"><canvas id="c1"></canvas></div>
+                <div class="pane"><canvas id="c2"></canvas></div>
+            </div>
+
+            <div id="compare-view">
+                <div id="zoom-info">Zoom: 100%</div>
+                <div id="stage">
+                    <div class="img-layer"><img id="img-ref" draggable="false"></div>
+                    <div class="img-layer" id="after-clip"><img id="img-ovl" draggable="false"></div>
+                    <div id="slider-bar"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <canvas id="tif-converter" style="display:none;"></canvas>
+
+    <script>
+        const state = {
+            bands: [ [null,null,null], [null,null,null] ],
+            img1: new Image(), img2: new Image(),
+            pairs: [], dragging: null,
+            // Camera State
+            cam: { x: 0, y: 0, scale: 1, fitScale: 1 },
+            isPanning: false, lastMouse: { x: 0, y: 0 }
+        };
+
+        const cans = [document.getElementById('c1'), document.getElementById('c2')];
+        const ctxs = cans.map(c => c.getContext('2d'));
+
+        // --- Multi-Spectral Logic ---
+        async function handleBand(e, imgIdx, bandIdx) {
+            const file = e.target.files[0]; if (!file) return;
+            const isTif = file.name.toLowerCase().endsWith('.tif') || file.name.toLowerCase().endsWith('.tiff');
+            const data = await (isTif ? file.arrayBuffer() : readFileAsData(file));
+            
+            let finalData, w, h;
+            if (isTif) {
+                const ifds = UTIF.decode(data); UTIF.decodeImage(data, ifds[0]);
+                finalData = UTIF.toRGBA8(ifds[0]); w = ifds[0].width; h = ifds[0].height;
+            } else {
+                const img = await loadImage(data);
+                const cvs = document.createElement('canvas'); cvs.width = img.width; cvs.height = img.height;
+                const ctx = cvs.getContext('2d'); ctx.drawImage(img, 0, 0);
+                finalData = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+                w = img.width; h = img.height;
+            }
+            state.bands[imgIdx][bandIdx] = { data: finalData, w, h };
+            document.getElementById((imgIdx === 0 ? 'ref-b' : 'ovl-b') + (bandIdx + 1)).classList.add('band-loaded');
+            createComposite(imgIdx);
+        }
+
+        function createComposite(idx) {
+            const bands = state.bands[idx];
+            const valid = bands.find(b => b !== null); if (!valid) return;
+            const w = valid.w, h = valid.h, compositeCvs = document.createElement('canvas');
+            compositeCvs.width = w; compositeCvs.height = h;
+            const output = compositeCvs.getContext('2d').createImageData(w, h);
+            for (let i = 0; i < output.data.length; i += 4) {
+                output.data[i] = bands[0] ? bands[0].data[i] : 0;
+                output.data[i+1] = bands[1] ? bands[1].data[i] : 0;
+                output.data[i+2] = bands[2] ? bands[2].data[i] : 0;
+                output.data[i+3] = 255;
+            }
+            compositeCvs.getContext('2d').putImageData(output, 0, 0);
+            const target = idx === 0 ? state.img1 : state.img2;
+            target.onload = () => { cans[idx].width = w; cans[idx].height = h; render(); };
+            target.src = compositeCvs.toDataURL();
+        }
+
+        function readFileAsData(f) { return new Promise(res => { const r = new FileReader(); r.onload = e => res(e.target.result); r.readAsDataURL(f); }); }
+        function loadImage(src) { return new Promise(res => { const i = new Image(); i.onload = () => res(i); i.src = src; }); }
+
+        // --- Zoom & Pan Engine ---
+        const compView = document.getElementById('compare-view');
+        const stage = document.getElementById('stage');
+
+        compView.addEventListener('wheel', e => {
+            if (document.getElementById('compare-view').style.display === 'none') return;
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            const newScale = Math.min(Math.max(state.cam.scale * delta, 0.1), 20);
+            
+            // Zoom toward mouse position
+            const rect = compView.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            state.cam.x = mouseX - (mouseX - state.cam.x) * (newScale / state.cam.scale);
+            state.cam.y = mouseY - (mouseY - state.cam.y) * (newScale / state.cam.scale);
+            state.cam.scale = newScale;
+            updateCamera();
+        });
+
+        compView.addEventListener('mousedown', e => {
+            if (e.target.id === 'slider-bar') return;
+            state.isPanning = true;
+            state.lastMouse = { x: e.clientX, y: e.clientY };
+        });
+
+        window.addEventListener('mousemove', e => {
+            if (!state.isPanning) return;
+            state.cam.x += e.clientX - state.lastMouse.x;
+            state.cam.y += e.clientY - state.lastMouse.y;
+            state.lastMouse = { x: e.clientX, y: e.clientY };
+            updateCamera();
+        });
+
+        window.addEventListener('mouseup', () => state.isPanning = false);
+
+        function updateCamera() {
+            stage.style.transform = `translate(${state.cam.x}px, ${state.cam.y}px) scale(${state.cam.scale})`;
+            document.getElementById('zoom-info').innerText = `Zoom: ${Math.round(state.cam.scale / state.cam.fitScale * 100)}%`;
+        }
+
+        function resetCamera() {
+            if (!state.img1.width) return;
+            const fit = Math.min((compView.clientWidth * 0.9) / state.img1.width, (compView.clientHeight * 0.9) / state.img1.height);
+            state.cam.fitScale = fit;
+            state.cam.scale = fit;
+            state.cam.x = (compView.clientWidth - state.img1.width * fit) / 2;
+            state.cam.y = (compView.clientHeight - state.img1.height * fit) / 2;
+            updateCamera();
+        }
+
+        // --- Alignment & Points ---
+        function setView(v) {
+            document.getElementById('btn-align').className = v === 'align' ? 'active' : '';
+            document.getElementById('btn-compare').className = v === 'compare' ? 'active' : '';
+            document.getElementById('align-view').style.display = v === 'align' ? 'flex' : 'none';
+            document.getElementById('compare-view').style.display = v === 'compare' ? 'flex' : 'none';
+
+            if (v === 'compare') {
+                const rImg = document.getElementById('img-ref'), oImg = document.getElementById('img-ovl');
+                rImg.src = state.img1.src; oImg.src = state.img2.src;
+                stage.style.width = state.img1.width + "px"; stage.style.height = state.img1.height + "px";
+                
+                if (state.pairs.length >= 2) {
+                    const n = state.pairs.length;
+                    let c1x = 0, c1y = 0, c2x = 0, c2y = 0;
+                    state.pairs.forEach(p => { c1x += p.p1.x; c1y += p.p1.y; c2x += p.p2.x; c2y += p.p2.y; });
+                    c1x /= n; c1y /= n; c2x /= n; c2y /= n;
+                    let d1 = 0, d2 = 0, cp = 0, dp = 0;
+                    state.pairs.forEach(p => {
+                        const dx1 = p.p1.x - c1x, dy1 = p.p1.y - c1y, dx2 = p.p2.x - c2x, dy2 = p.p2.y - c2y;
+                        d1 += Math.sqrt(dx1**2 + dy1**2); d2 += Math.sqrt(dx2**2 + dy2**2);
+                        dp += (dx1 * dx2 + dy1 * dy2); cp += (dx1 * dy2 - dy1 * dx2);
+                    });
+                    const s = d1 / d2, a = Math.atan2(cp, dp);
+                    oImg.style.transform = `translate(${c1x}px, ${c1y}px) rotate(${-a * (180/Math.PI)}deg) scale(${s}) translate(${-c2x}px, ${-c2y}px)`;
+                }
+                resetCamera();
+            }
+        }
+
+        function getMousePos(e, canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const ratio = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+            return { x: (e.clientX - rect.left - (rect.width - canvas.width * ratio) / 2) / ratio, y: (e.clientY - rect.top - (rect.height - canvas.height * ratio) / 2) / ratio };
+        }
+
+        function addPair() {
+            if (!state.img1.src || !state.img2.src) return;
+            state.pairs.push({ p1: { x: state.img1.width/2, y: state.img1.height/2 }, p2: { x: state.img2.width/2, y: state.img2.height/2 }, color: state.pairs.length%2 === 0 ? '#ff4444' : '#ffeb3b' });
+            render();
+        }
+
+        function removePair(i) { state.pairs.splice(i, 1); render(); }
+
+        cans.forEach((can, idx) => {
+            can.onmousedown = e => {
+                const pos = getMousePos(e, can);
+                state.pairs.forEach((p, pi) => {
+                    const pt = idx === 0 ? p.p1 : p.p2;
+                    if (Math.hypot(pt.x-pos.x, pt.y-pos.y) < can.width/25) state.dragging = { pi, ptIdx: idx };
+                });
+            };
+        });
+
+        window.onmousemove = e => {
+            if (!state.dragging) return;
+            const pos = getMousePos(e, cans[state.dragging.ptIdx]);
+            if (state.dragging.ptIdx === 0) state.pairs[state.dragging.pi].p1 = pos;
+            else state.pairs[state.dragging.pi].p2 = pos;
+            render();
+        };
+
+        window.onmouseup = () => { state.dragging = null; };
+
+        function render() {
+            [0, 1].forEach(i => {
+                const ctx = ctxs[i]; if (!cans[i].width) return;
+                ctx.clearRect(0, 0, cans[i].width, cans[i].height);
+                ctx.drawImage(i === 0 ? state.img1 : state.img2, 0, 0);
+                state.pairs.forEach((p, pi) => {
+                    const pt = i === 0 ? p.p1 : p.p2, s = cans[i].width/80;
+                    ctx.strokeStyle = p.color; ctx.lineWidth = cans[i].width/180;
+                    ctx.beginPath(); ctx.moveTo(pt.x-s, pt.y); ctx.lineTo(pt.x+s, pt.y); ctx.moveTo(pt.x, pt.y-s); ctx.lineTo(pt.x, pt.y+s); ctx.stroke();
+                });
+            });
+            const list = document.getElementById('point-list'); list.innerHTML = '';
+            state.pairs.forEach((p, i) => {
+                const d = document.createElement('div'); d.className='point-tag'; d.style.setProperty('--clr', p.color);
+                d.innerHTML = `<span>Pair ${i+1}</span><button onclick="removePair(${i})" style="padding:2px 6px; font-size:10px">DEL</button>`;
+                list.appendChild(d);
+            });
+        }
+
+        function resetAll() { state.pairs=[]; state.bands=[[null,null,null],[null,null,null]]; render(); setView('align'); document.querySelectorAll('.band-loaded').forEach(b => b.classList.remove('band-loaded')); }
+
+        let isSlide = false;
+        document.getElementById('slider-bar').onmousedown = e => { e.preventDefault(); e.stopPropagation(); isSlide = true; };
+        window.addEventListener('mouseup', () => isSlide = false);
+        window.addEventListener('mousemove', e => {
+            if (!isSlide) return;
+            const rect = stage.getBoundingClientRect();
+            let p = ((e.clientX - rect.left) / rect.width) * 100;
+            document.documentElement.style.setProperty('--slider-pos', Math.max(0, Math.min(100, p)) + '%');
+        });
+    </script>
+</body>
+</html>

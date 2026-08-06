@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProAlign V6 by Tracy Rose</title>
+    <!-- Include UTIF.js for TIFF decoding support -->
+    <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"></script>
+    <style>
+        :root {
+            --accent: #00f2ff;
+            --bg: #0b0f1a;
+            --panel: rgba(22, 30, 46, 0.95);
+            --slider-pos: 50%;
+        }
+
+        * {
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg);
+            color: #e2e8f0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        nav {
+            padding: 0.75rem 1.5rem;
+            background: var(--panel);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .controls { display: flex; gap: 12px; }
+        
+        button {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+
+        button:hover { background: rgba(255, 255, 255, 0.15); border-color: var(--accent); }
+        button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+        button.primary { background: #10b981; border: none; }
+
+        main { flex: 1; display: flex; position: relative; background: #000; overflow: hidden; }
+
+        #sidebar {
+            width: 260px;
+            background: var(--panel);
+            border-right: 1px solid rgba(255,255,255,0.1);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            z-index: 100;
+        }
+
+        #view-container { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; }
+
+        #align-view { display: flex; width: 100%; height: 100%; }
+        .pane { 
+            flex: 1; position: relative; background: #050505; 
+            display: flex; align-items: center; justify-content: center;
+            border-right: 1px solid #222;
+        }
+        canvas { max-width: 95%; max-height: 95%; cursor: crosshair; }
+        
+        .pane-label {
+            position: absolute; top: 12px; left: 12px;
+            background: rgba(0,0,0,0.8); padding: 4px 10px;
+            font-size: 11px; text-transform: uppercase; border-radius: 4px;
+            color: var(--accent); pointer-events: none;
+        }
+
+        #compare-view { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            display: none; background: #000; 
+            align-items: center; justify-content: center;
+        }
+
+        #stage {
+            position: relative;
+            transform-origin: center center;
+            box-shadow: 0 0 100px rgba(0,0,0,0.5);
+            touch-action: none; 
+        }
+
+        .img-layer {
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 100%;
+            overflow: hidden;
+            pointer-events: none; 
+        }
+
+        #img-ref, #img-ovl { 
+            position: absolute; top: 0; left: 0;
+            transform-origin: 0 0;
+            display: block;
+        }
+
+        #after-clip {
+            z-index: 2;
+            clip-path: inset(0 0 0 var(--slider-pos));
+        }
+
+        #slider-bar {
+            position: absolute; top: 0; bottom: 0; left: var(--slider-pos);
+            width: 4px; background: var(--accent); z-index: 10;
+            cursor: ew-resize; transform: translateX(-50%);
+            box-shadow: 0 0 15px var(--accent);
+            pointer-events: auto; 
+        }
+
+        #slider-bar::after {
+            content: '↔'; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); width: 40px; height: 40px;
+            background: var(--accent); color: #000; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; font-weight: bold;
+        }
+
+        .point-tag {
+            background: rgba(255,255,255,0.05); padding: 8px 12px;
+            border-radius: 6px; display: flex; justify-content: space-between;
+            align-items: center; font-size: 0.8rem; border-left: 4px solid var(--clr);
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div style="font-weight: 800; color: var(--accent);">PRO_ALIGN_V6 by Tracy Rose</div>
+        <div class="controls">
+            <button onclick="document.getElementById('f1').click()">Load Base</button>
+            <button onclick="document.getElementById('f2').click()">Load Overlay</button>
+            <!-- Accept TIF extensions specifically -->
+            <input type="file" id="f1" hidden accept="image/*,.tif,.tiff">
+            <input type="file" id="f2" hidden accept="image/*,.tif,.tiff">
+            <button id="btn-align" class="active" onclick="setView('align')">1. Alignment</button>
+            <button id="btn-compare" onclick="setView('compare')">2. Compare</button>
+        </div>
+        <button style="color:#ff4d4d" onclick="resetAll()">Reset</button>
+    </nav>
+
+    <main>
+        <div id="sidebar">
+            <h4 style="margin:0">Registration</h4>
+            <p style="font-size:0.75rem; opacity:0.6">TIF support enabled. Use high-res images for best accuracy.</p>
+            <button class="primary" onclick="addPair()">+ Add New Pair</button>
+            <div id="point-list" style="display:flex; flex-direction:column; gap:8px; overflow-y:auto;"></div>
+        </div>
+
+        <div id="view-container">
+            <div id="align-view">
+                <div class="pane">
+                    <span class="pane-label">Reference</span>
+                    <canvas id="c1"></canvas>
+                </div>
+                <div class="pane">
+                    <span class="pane-label">Overlay</span>
+                    <canvas id="c2"></canvas>
+                </div>
+            </div>
+
+            <div id="compare-view">
+                <div id="stage">
+                    <div class="img-layer">
+                        <img id="img-ref" draggable="false">
+                    </div>
+                    <div class="img-layer" id="after-clip">
+                        <img id="img-ovl" draggable="false">
+                    </div>
+                    <div id="slider-bar"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Hidden canvas for TIFF conversion -->
+    <canvas id="tif-converter" style="display:none;"></canvas>
+
+    <script>
+        const state = {
+            img1: new Image(),
+            img2: new Image(),
+            pairs: [],
+            dragging: null
+        };
+
+        const cans = [document.getElementById('c1'), document.getElementById('c2')];
+        const ctxs = cans.map(c => c.getContext('2d'));
+
+        function getMousePos(e, canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const ratio = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+            const ox = (rect.width - canvas.width * ratio) / 2;
+            const oy = (rect.height - canvas.height * ratio) / 2;
+            return {
+                x: (e.clientX - rect.left - ox) / ratio,
+                y: (e.clientY - rect.top - oy) / ratio
+            };
+        }
+
+        document.getElementById('f1').onchange = (e) => handleFileSelect(e, state.img1, 0);
+        document.getElementById('f2').onchange = (e) => handleFileSelect(e, state.img2, 1);
+
+        function handleFileSelect(e, imgObj, idx) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const isTiff = file.name.toLowerCase().endsWith('.tif') || file.name.toLowerCase().endsWith('.tiff');
+            const reader = new FileReader();
+
+            reader.onload = (event) => {
+                if (isTiff) {
+                    // TIF Logic
+                    const buffer = event.target.result;
+                    const ifds = UTIF.decode(buffer);
+                    UTIF.decodeImage(buffer, ifds[0]);
+                    const rgba = UTIF.toRGBA8(ifds[0]);
+                    
+                    const convCanvas = document.getElementById('tif-converter');
+                    convCanvas.width = ifds[0].width;
+                    convCanvas.height = ifds[0].height;
+                    const convCtx = convCanvas.getContext('2d');
+                    
+                    const imgData = convCtx.createImageData(ifds[0].width, ifds[0].height);
+                    imgData.data.set(rgba);
+                    convCtx.putImageData(imgData, 0, 0);
+                    
+                    imgObj.onload = () => {
+                        cans[idx].width = imgObj.width;
+                        cans[idx].height = imgObj.height;
+                        render();
+                    };
+                    imgObj.src = convCanvas.toDataURL();
+                } else {
+                    // Standard Logic (JPG/PNG)
+                    imgObj.onload = () => {
+                        cans[idx].width = imgObj.width;
+                        cans[idx].height = imgObj.height;
+                        render();
+                    };
+                    imgObj.src = event.target.result;
+                }
+            };
+
+            if (isTiff) reader.readAsArrayBuffer(file);
+            else reader.readAsDataURL(file);
+        }
+
+        function addPair() {
+            if (!state.img1.src || !state.img2.src) return;
+            const color = state.pairs.length % 2 === 0 ? '#ff4444' : '#ffeb3b';
+            state.pairs.push({
+                p1: { x: state.img1.width / 2, y: state.img1.height / 2 },
+                p2: { x: state.img2.width / 2, y: state.img2.height / 2 },
+                color
+            });
+            render();
+        }
+
+        function removePair(i) { state.pairs.splice(i, 1); render(); }
+
+        cans.forEach((can, idx) => {
+            can.addEventListener('mousedown', e => {
+                const pos = getMousePos(e, can);
+                state.pairs.forEach((p, pi) => {
+                    const pt = idx === 0 ? p.p1 : p.p2;
+                    if (Math.hypot(pt.x - pos.x, pt.y - pos.y) < can.width / 25) {
+                        state.dragging = { pi, ptIdx: idx };
+                    }
+                });
+            });
+        });
+
+        window.addEventListener('mousemove', e => {
+            if (!state.dragging) return;
+            const pos = getMousePos(e, cans[state.dragging.ptIdx]);
+            if (state.dragging.ptIdx === 0) state.pairs[state.dragging.pi].p1 = pos;
+            else state.pairs[state.dragging.pi].p2 = pos;
+            render();
+        });
+
+        window.addEventListener('mouseup', () => state.dragging = null);
+
+        function render() {
+            [0, 1].forEach(i => {
+                const ctx = ctxs[i];
+                if (!cans[i].width) return;
+                ctx.clearRect(0, 0, cans[i].width, cans[i].height);
+                ctx.drawImage(i === 0 ? state.img1 : state.img2, 0, 0);
+                state.pairs.forEach((p, pi) => {
+                    const pt = i === 0 ? p.p1 : p.p2;
+                    const s = cans[i].width / 80;
+                    ctx.strokeStyle = p.color;
+                    ctx.lineWidth = cans[i].width / 180;
+                    ctx.beginPath();
+                    ctx.moveTo(pt.x - s, pt.y); ctx.lineTo(pt.x + s, pt.y);
+                    ctx.moveTo(pt.x, pt.y - s); ctx.lineTo(pt.x, pt.y + s);
+                    ctx.stroke();
+                });
+            });
+
+            const list = document.getElementById('point-list');
+            list.innerHTML = '';
+            state.pairs.forEach((p, i) => {
+                const d = document.createElement('div');
+                d.className = 'point-tag'; d.style.setProperty('--clr', p.color);
+                d.innerHTML = `<span>Pair ${i+1}</span><button onclick="removePair(${i})" style="padding:2px 6px; font-size:10px">DEL</button>`;
+                list.appendChild(d);
+            });
+        }
+
+        function setView(v) {
+            document.getElementById('btn-align').classList.toggle('active', v === 'align');
+            document.getElementById('btn-compare').classList.toggle('active', v === 'compare');
+            document.getElementById('align-view').style.display = v === 'align' ? 'flex' : 'none';
+            document.getElementById('compare-view').style.display = v === 'compare' ? 'flex' : 'none';
+
+            if (v === 'compare') {
+                const stage = document.getElementById('stage');
+                const rImg = document.getElementById('img-ref');
+                const oImg = document.getElementById('img-ovl');
+                rImg.src = state.img1.src;
+                oImg.src = state.img2.src;
+
+                stage.style.width = state.img1.width + "px";
+                stage.style.height = state.img1.height + "px";
+
+                const container = document.getElementById('compare-view');
+                const fitScale = Math.min((container.clientWidth * 0.9) / state.img1.width, (container.clientHeight * 0.9) / state.img1.height);
+                stage.style.transform = `scale(${fitScale})`;
+
+                if (state.pairs.length >= 2) {
+                    const n = state.pairs.length;
+                    let c1x = 0, c1y = 0, c2x = 0, c2y = 0;
+                    state.pairs.forEach(p => {
+                        c1x += p.p1.x; c1y += p.p1.y;
+                        c2x += p.p2.x; c2y += p.p2.y;
+                    });
+                    c1x /= n; c1y /= n; c2x /= n; c2y /= n;
+
+                    let dist1 = 0, dist2 = 0, cross_prod = 0, dot_prod = 0;
+
+                    state.pairs.forEach(p => {
+                        const dx1 = p.p1.x - c1x, dy1 = p.p1.y - c1y;
+                        const dx2 = p.p2.x - c2x, dy2 = p.p2.y - c2y;
+                        dist1 += Math.sqrt(dx1*dx1 + dy1*dy1);
+                        dist2 += Math.sqrt(dx2*dx2 + dy2*dy2);
+                        dot_prod += (dx1 * dx2 + dy1 * dy2);
+                        cross_prod += (dx1 * dy2 - dy1 * dx2);
+                    });
+
+                    const scale = dist1 / dist2;
+                    const angle = Math.atan2(cross_prod, dot_prod);
+                    const rotationDeg = angle * (180 / Math.PI);
+
+                    oImg.style.transform = `
+                        translate(${c1x}px, ${c1y}px)
+                        rotate(${-rotationDeg}deg)
+                        scale(${scale})
+                        translate(${-c2x}px, ${-c2y}px)
+                    `;
+                    rImg.style.transform = `translate(0,0)`;
+                }
+            }
+        }
+
+        function resetAll() { state.pairs = []; render(); setView('align'); }
+
+        let isSlide = false;
+        const bar = document.getElementById('slider-bar');
+        
+        bar.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isSlide = true;
+        });
+
+        window.addEventListener('mouseup', () => isSlide = false);
+        window.addEventListener('mousemove', (e) => {
+            if (!isSlide) return;
+            const rect = document.getElementById('stage').getBoundingClientRect();
+            let p = ((e.clientX - rect.left) / rect.width) * 100;
+            document.documentElement.style.setProperty('--slider-pos', Math.max(0, Math.min(100, p)) + '%');
+        });
+    </script>
+</body>
+</html>
